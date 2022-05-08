@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@v3
       - name: Build
         run: |
+          C:\msys64\msys2_shell.cmd -no-start -defterm -c "pacman -S base-devel gcc git --noconfirm"
           C:\msys64\msys2_shell.cmd -no-start -defterm -where %CD% -c "make"
           echo Build Complete
       - name: Archive toolchain
