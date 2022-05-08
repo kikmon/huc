@@ -10,8 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code from the repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Build
         run: |
           make
           echo Build Complete
+      - name: Archive toolchain
+        uses: actions/upload-artifact@v3
+        with:
+          name: toolchain
+          path: |
+            bin
+            include
+            
+            
