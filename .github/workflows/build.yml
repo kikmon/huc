@@ -24,7 +24,7 @@ jobs:
             include
 
   build_windows_2022:
-    runs-on: ubuntu-2022
+    runs-on: windows-2022
     steps:
       - name: Check out code from the repository
         uses: actions/checkout@v3
