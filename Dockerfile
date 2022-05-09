@@ -24,6 +24,9 @@ COPY --from=Build /app/include/ /huc/include/
 ENV PATH="/huc/bin:${PATH}"
 ENV PCE_INCLUDE="/huc/include/pce"
 
+# subtle differences between shell and executable forms concerning arguments and * expansions
+WORKDIR /src
+ENTRYPOINT ["huc"]
 
 
 
