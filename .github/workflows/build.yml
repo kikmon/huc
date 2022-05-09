@@ -42,7 +42,7 @@ jobs:
             include
             
   build_docker:
-    runs-on: windows-2022
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code from the repository
         uses: actions/checkout@v3
