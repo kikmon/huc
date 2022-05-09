@@ -2,7 +2,10 @@
 #RUN apk update && apk add --virtual build-dependencies build-base gcc wget git
 
 FROM ubuntu:latest AS Build
-RUN apt-get update && apt-get install -y build-essential git
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ADD . /app
 WORKDIR /app
