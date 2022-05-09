@@ -53,8 +53,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: false
-          tags: huc/huc:latest
+          push: true
+          tags: https://ghcr.io/huc/huc:latest
           name: Example workflow for Docker using Snyk 
 
   security:
@@ -65,7 +65,7 @@ jobs:
       env:
         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       with:
-        image: huc/huc:latest
+        image: https://ghcr.io/huc/huc:latest
 
             
             
