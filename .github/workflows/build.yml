@@ -74,7 +74,40 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
+containerd:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          buildkitd-flags: --debug
+      -
+        name: Set up containerd
+        uses: crazy-max/ghaction-setup-containerd@v1
+      -
+        name: Build Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          tags: docker.io/kikmon/huc:latest
+          outputs: type=oci,dest=/tmp/image.tar
+      -
+        name: Import image in containerd
+        run: |
+          sudo ctr i import --base-name docker.io/kikmon/huc --digests --all-platforms /tmp/image.tar
+      -
+        name: Push image with containerd
+        run: |
+          sudo ctr --debug i push --user "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" docker.io//kikmon/huc:lates
+          
   security:
     runs-on: ubuntu-latest
     steps:
