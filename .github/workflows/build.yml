@@ -48,6 +48,7 @@ jobs:
   build_docker:
     runs-on: ubuntu-latest
     steps:
+    # Don't forget to activate Write permission in for GITHUB_TOKEN in project config
       - name: Check out code from the repository
         uses: actions/checkout@v3
       - name: Build Setup
@@ -74,40 +75,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-  containerd:
-    runs-on: ubuntu-latest
-    steps:
-      -
-        name: Checkout
-        uses: actions/checkout@v2
-      -
-        name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-        with:
-          buildkitd-flags: --debug
-      -
-        name: Set up containerd
-        uses: crazy-max/ghaction-setup-containerd@v1
-      -
-        name: Build Docker image
-        uses: docker/build-push-action@v3
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/kikmon/huc:latest
-          outputs: type=oci,dest=/tmp/image.tar
-      -
-        name: Import image in containerd
-        run: |
-          sudo ctr i import --base-name ghcr.io/kikmon/huc --digests --all-platforms /tmp/image.tar
-      -
-        name: Push image with containerd
-        run: |
-          sudo ctr --debug i push --user "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" ghcr.io/kikmon/huc:latest
-          
+        
   security:
     runs-on: ubuntu-latest
     steps:
