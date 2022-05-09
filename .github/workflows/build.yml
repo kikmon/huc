@@ -27,7 +27,7 @@ jobs:
             bin
             include
 
-  build_windows_2022:
+  build_msys2_windows_2022:
     runs-on: windows-2022
     steps:
       - name: Check out code from the repository
@@ -76,7 +76,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
         
-  security:
+  snyk_security:
     runs-on: ubuntu-latest
     steps:
     - name: Run Snyk to check Docker image for vulnerabilities
