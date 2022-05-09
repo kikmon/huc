@@ -74,7 +74,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-containerd:
+  containerd:
     runs-on: ubuntu-latest
     steps:
       -
@@ -97,16 +97,16 @@ containerd:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          tags: docker.io/kikmon/huc:latest
+          tags: ghcr.io/kikmon/huc:latest
           outputs: type=oci,dest=/tmp/image.tar
       -
         name: Import image in containerd
         run: |
-          sudo ctr i import --base-name docker.io/kikmon/huc --digests --all-platforms /tmp/image.tar
+          sudo ctr i import --base-name ghcr.io/kikmon/huc --digests --all-platforms /tmp/image.tar
       -
         name: Push image with containerd
         run: |
-          sudo ctr --debug i push --user "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" docker.io//kikmon/huc:lates
+          sudo ctr --debug i push --user "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" ghcr.io/kikmon/huc:latest
           
   security:
     runs-on: ubuntu-latest
