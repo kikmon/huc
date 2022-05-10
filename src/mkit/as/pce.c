@@ -1,1266 +1,890 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include "defs.h"
 #include "externs.h"
 #include "protos.h"
-#include "pce.h"
 
-/* locals */
-static unsigned char buffer[128 * 256];	/* buffer for .inc and .def directives */
-static unsigned char header[512];	/* rom header */
+/* globals */
+char pcx_name[128];			/* pcx file name */
+int pcx_w, pcx_h;			/* pcx dimensions */
+int pcx_nb_colors;			/* number of colors in the pcx */
+int pcx_nb_args;			/* number of argument */
+unsigned int pcx_arg[8];		/* pcx args array */
+unsigned char *pcx_buf;			/* pointer to the pcx buffer */
+unsigned char pcx_pal[256][3];		/* palette */
+unsigned char pcx_plane[2048][4];	/* plane buffer */
+unsigned int tile_offset;		/* offset in the tile reference table */
+struct t_tile tile[256];		/* tile info table */
+struct t_tile *tile_tbl[256];		/* tile hash table */
+struct t_symbol *tile_lablptr;		/* tile symbol reference */
+struct PCX_HEADER {			/* pcx file header */
+	unsigned char manufacturer, version;
+	unsigned char encoding;
+	unsigned char bpp;
+	unsigned char xmin[2], ymin[2], xmax[2], ymax[2];
+	unsigned char xdpi[2], ydpi[2];
+	unsigned char colormap[16][3];
+	unsigned char reserved;
+	unsigned char np;
+	unsigned char bytes_per_line[2];
+	unsigned char palette_info[2];
+	unsigned char xscreen[2], yscreen[2];
+	unsigned char pad[54];
+} pcx;
+
+/* externs */
+extern struct t_symbol *expr_lablptr;	/* pointer to the lastest label */
+extern int expr_lablcnt;		/* number of label seen in an expression */
+
+/* macros */
+#define GET_SHORT(a) ((a[1] << 8) + a[0])
 
 
 /* ----
- * write_header()
+ * pcx_pack_8x8_tile()
  * ----
- * generate and write rom header
- */
-
-void
-pce_write_header(FILE *f, int banks)
-{
-	/* setup header */
-	memset(header, 0, 512);
-	header[0] = banks;
-
-	/* write */
-	fwrite(header, 512, 1, f);
-}
-
-
-/* ----
- * scan_8x8_tile()
- * ----
- * scan an 8x8 tile for its palette number
  */
 
 int
-pce_scan_8x8_tile(unsigned int x, unsigned int y)
+pcx_pack_8x8_tile(unsigned char *buffer, int x, int y)
 {
-	int i, j;
-	unsigned int pixel;
 	unsigned char *ptr;
-
-	/* scan the tile only in the last pass */
-	if (pass != LAST_PASS)
-		return (0);
 
 	/* tile address */
 	ptr = pcx_buf + x + (y * pcx_w);
 
-	/* scan the tile for the 1st non-zero pixel */
-	for (i = 0; i < 8; i++) {
-		for (j = 0; j < 8; j++) {
-			pixel = ptr[j];
-			if (pixel & 0x0F) return (pixel >> 4);
-		}
-		ptr += pcx_w;
-	}
-
-	/* default palette */
-	return (0);
+	/* encode the tile */
+	return (machine->pack_8x8_tile(buffer, ptr, pcx_w, CHUNKY_TILE));
 }
 
 
 /* ----
- * scan_16x16_tile()
+ * pcx_pack_16x16_tile()
  * ----
- * scan a 16x16 tile for its palette number
  */
 
 int
-pce_scan_16x16_tile(unsigned int x, unsigned int y)
+pcx_pack_16x16_tile(unsigned char *buffer, int x, int y)
 {
-	int i, j;
-	unsigned int pixel;
 	unsigned char *ptr;
-
-	/* scan the tile only in the last pass */
-	if (pass != LAST_PASS)
-		return (0);
 
 	/* tile address */
 	ptr = pcx_buf + x + (y * pcx_w);
 
-	/* scan the tile for the 1st non-zero pixel */
-	for (i = 0; i < 16; i++) {
-		for (j = 0; j < 16; j++) {
-			pixel = ptr[j];
-			if (pixel & 0x0F) return (pixel >> 4);
-		}
-		ptr += pcx_w;
-	}
-
-	/* default palette */
-	return (0);
-}
-
-
-/* ----
- * pack_8x8_tile()
- * ----
- * encode a 8x8 tile
- */
-
-int
-pce_pack_8x8_tile(unsigned char *buffer, void *data, int line_offset, int format)
-{
-	int i, j;
-	int cnt;
-	unsigned int pixel, mask;
-	unsigned char *ptr;
-	unsigned int *packed;
-
-	/* pack the tile only in the last pass */
-	if (pass != LAST_PASS)
-		return (0);
-
-	/* clear buffer */
-	memset(buffer, 0, 32);
-
 	/* encode the tile */
-	switch (format) {
-	case CHUNKY_TILE:
-		/* 8-bit chunky format - from a pcx */
-		cnt = 0;
-		ptr = (unsigned char *)data;
-
-		for (i = 0; i < 8; i++) {
-			for (j = 0; j < 8; j++) {
-				pixel = ptr[j ^ 0x07];
-				mask = 1 << j;
-				buffer[cnt] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 1] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 16] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 17] |= (pixel & 0x08) ? mask : 0;
-			}
-			ptr += line_offset;
-			cnt += 2;
-		}
-		break;
-
-	case PACKED_TILE:
-		/* 4-bit packed format - from an array */
-		cnt = 0;
-		packed = (unsigned int *)data;
-
-		for (i = 0; i < 8; i++) {
-			pixel = packed[i];
-
-			for (j = 0; j < 8; j++) {
-				mask = 1 << j;
-				buffer[cnt] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 1] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 16] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 17] |= (pixel & 0x08) ? mask : 0;
-				pixel >>= 4;
-			}
-			cnt += 2;
-		}
-		break;
-
-	default:
-		/* other formats not supported */
-		error("Internal error: unsupported format passed to 'pack_8x8_tile'!");
-		break;
-	}
-
-	/* ok */
-	return (0);
+	return (machine->pack_16x16_tile(buffer, ptr, pcx_w, CHUNKY_TILE));
 }
 
 
 /* ----
- * pack_16x16_tile()
+ * pcx_pack_16x16_sprite()
  * ----
- * encode a 16x16 tile
  */
 
 int
-pce_pack_16x16_tile(unsigned char *buffer, void *data, int line_offset, int format)
+pcx_pack_16x16_sprite(unsigned char *buffer, int x, int y)
 {
-	int i, j;
-	int cnt;
-	unsigned int pixel, mask;
 	unsigned char *ptr;
 
-	/* pack the tile only in the last pass */
-	if (pass != LAST_PASS)
-		return (0);
-
-	/* clear buffer */
-	memset(buffer, 0, 128);
-
-	/* encode the tile */
-	switch (format) {
-	case CHUNKY_TILE:
-		/* 8-bit chunky format - from a pcx */
-		cnt = 0;
-		ptr = (unsigned char *)data;
-
-		for (i = 0; i < 16; i++) {
-			for (j = 0; j < 8; j++) {
-				pixel = ptr[j ^ 0x07];
-				mask = 1 << j;
-				buffer[cnt] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 1] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 16] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 17] |= (pixel & 0x08) ? mask : 0;
-
-				pixel = ptr[(j + 8) ^ 0x07];
-				buffer[cnt + 32] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 33] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 48] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 49] |= (pixel & 0x08) ? mask : 0;
-			}
-			if (i == 7)
-				cnt += 48;
-			ptr += line_offset;
-			cnt += 2;
-		}
-		break;
-
-	default:
-		/* other formats not supported */
-		error("Internal error: unsupported format passed to 'pack_16x16_tile'!");
-		break;
-	}
-
-	/* ok */
-	return (0);
-}
-
-
-/* ----
- * pack_16x16_sprite()
- * ----
- * encode a 16x16 sprite
- */
-
-int
-pce_pack_16x16_sprite(unsigned char *buffer, void *data, int line_offset, int format)
-{
-	int i, j;
-	int cnt;
-	unsigned int pixel, mask;
-	unsigned char *ptr;
-	unsigned int *packed;
-
-	/* pack the sprite only in the last pass */
-	if (pass != LAST_PASS)
-		return (0);
-
-	/* clear buffer */
-	memset(buffer, 0, 128);
+	/* sprite address */
+	ptr = pcx_buf + x + (y * pcx_w);
 
 	/* encode the sprite */
-	switch (format) {
-	case CHUNKY_TILE:
-		/* 8-bit chunky format - from pcx */
-		cnt = 0;
-		ptr = (unsigned char *)data;
+	return (machine->pack_16x16_sprite(buffer, ptr, pcx_w, CHUNKY_TILE));
+}
 
-		for (i = 0; i < 16; i++) {
-			/* right column */
-			for (j = 0; j < 8; j++) {
-				pixel = ptr[j ^ 0x0F];
-				mask = 1 << j;
-				buffer[cnt] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 32] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 64] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 96] |= (pixel & 0x08) ? mask : 0;
-			}
 
-			/* left column */
-			for (j = 0; j < 8; j++) {
-				pixel = ptr[j ^ 0x07];
-				mask = 1 << j;
-				buffer[cnt + 1] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 33] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 65] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 97] |= (pixel & 0x08) ? mask : 0;
-			}
-			ptr += line_offset;
-			cnt += 2;
-		}
-		break;
+/* ----
+ * pcx_set_tile()
+ * ----
+ */
 
-	case PACKED_TILE:
-		/* 4-bit packed format - from array */
-		cnt = 0;
-		packed = (unsigned int *)data;
+int
+pcx_set_tile(struct t_symbol *ref, unsigned int offset)
+{
+	int i;
+	int hash;
+	int size, start;
+	unsigned int crc;
+	unsigned char *data;
+	int nb;
 
-		for (i = 0; i < 16; i++) {
-			/* left column */
-			pixel = packed[cnt];
+	/* do nothing in first passes */
+	if (pass != LAST_PASS)
+		return (1);
 
-			for (j = 0; j < 8; j++) {
-				mask = 1 << j;
-				buffer[cnt + 1] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 33] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 65] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 97] |= (pixel & 0x08) ? mask : 0;
-				pixel >>= 4;
-			}
+	/* same tile set? */
+	if (ref == NULL)
+		return (1);
+	if ((ref == tile_lablptr) && (offset == tile_offset))
+		return (1);
 
-			/* right column */
-			pixel = packed[cnt + 1];
+	/* check symbol */
+	if (ref->nb == 0) {
+		if ((ref->type == IFUNDEF) || (ref->type == UNDEF))
+			error("Tile table undefined!");
+		else
+			error("Incorrect tile table reference!");
 
-			for (j = 0; j < 8; j++) {
-				mask = 1 << j;
-				buffer[cnt] |= (pixel & 0x01) ? mask : 0;
-				buffer[cnt + 32] |= (pixel & 0x02) ? mask : 0;
-				buffer[cnt + 64] |= (pixel & 0x04) ? mask : 0;
-				buffer[cnt + 96] |= (pixel & 0x08) ? mask : 0;
-				pixel >>= 4;
-			}
-			cnt += 2;
-		}
-		break;
+		/* no tile table */
+		tile_lablptr = NULL;
+		return (1);
+	}
+	if (ref->size == 0) {
+		error("Tile table has not been compiled yet!");
+		tile_lablptr = NULL;
+		return (1);
+	}
 
-	default:
-		/* other formats not supported */
-		error("Internal error: unsupported format passed to 'pack_16x16_sprite'!");
-		break;
+	/* adjust offset */
+	start = (offset - ref->value);
+
+	if ((start < 0))
+		goto err;
+	if ((start % ref->size) != 0)
+		goto err;
+	if ((start / ref->size) >= ref->nb)
+		goto err;
+
+	/* reset tile hash table */
+	for (i = 0; i < 256; i++)
+		tile_tbl[i] = NULL;
+
+	/* get infos */
+	nb = ref->nb - (start / ref->size);
+	size = ref->size;
+	data = &rom[ref->bank - bank_base][ref->value & 0x1FFF] + start;
+
+	/* 256 tiles max */
+	if (nb > 256)
+		nb = 256;
+
+	/* parse tiles */
+	for (i = 0; i < nb; i++) {
+		/* calculate tile crc */
+		crc = crc_calc(data, size);
+		hash = (crc & 0xFF);
+
+		/* insert the tile in the tile table */
+		tile[i].next = tile_tbl[hash];
+		tile[i].index = i;
+		tile[i].data = data;
+		tile[i].crc = crc;
+		tile_tbl[hash] = &tile[i];
+
+		/* next */
+		data += size;
 	}
 
 	/* ok */
+	tile_lablptr = ref;
+	tile_offset = offset;
+	return (1);
+
+	/* error */
+err:
+	tile_lablptr = NULL;
+	error("Incorrect tile table reference!");
+	return (1);
+}
+
+
+/* ----
+ * pcx_search_tile()
+ * ----
+ */
+
+int
+pcx_search_tile(unsigned char *data, int size)
+{
+	struct t_tile *tile;
+	unsigned int crc;
+
+	/* do nothing in first passes */
+	if (pass != LAST_PASS)
+		return (0);
+
+	/* quick check */
+	if (tile_lablptr == NULL)
+		return (-1);
+	if (tile_lablptr->size != size)
+		return (-1);
+
+	/* calculate tile crc */
+	crc = crc_calc(data, size);
+	tile = tile_tbl[crc & 0xFF];
+
+	/* search tile */
+	while (tile) {
+		if (tile->crc == crc) {
+			if (memcmp(tile->data, data, size) == 0)
+				return (tile->index);
+		}
+		tile = tile->next;
+	}
+
+	/* not found */
+	return (-1);
+}
+
+
+/* ----
+ * pcx_get_args()
+ * ----
+ * get arguments in pcx pseudo instructions (.incchr/spr/tile/pal/bat/chrpal/sprpal/tilepal)
+ */
+
+int
+pcx_get_args(int *ip)
+{
+	char name[128];
+	char c;
+
+	/* get pcx file name */
+	if (!getstring(ip, name, 127))
+		return (0);
+
+	/* reset args counter */
+	pcx_nb_args = 0;
+
+	/* get args */
+	for (;;) {
+		/* skip spaces */
+		while (isspace(c = prlnbuf[(*ip)++])) ;
+
+		/* check syntax */
+		if ((c != ',') && (c != ';') && (c != 0)) {
+			error("Syntax error!");
+			return (0);
+		}
+		if (c != ',')
+			break;
+
+		/* get arg */
+		if (!evaluate(ip, 0, 0))
+			return (0);
+
+		/* store arg */
+		pcx_arg[pcx_nb_args++] = value;
+
+		/* check number of args */
+		if (pcx_nb_args == 7)
+			break;
+	}
+
+	/* check number of args */
+	if (optype & (1 << pcx_nb_args)) {
+		error("Invalid number of arguments!");
+		return (0);
+	}
+
+	/* load and unpack the pcx */
+	if (!pcx_load(name))
+		return (0);
+
+	/* parse tiles */
+	if (opval == P_INCMAP) {
+		if (expr_lablcnt == 0)
+			error("No tile table reference!");
+		if (expr_lablcnt > 1) {
+			expr_lablcnt = 0;
+			error("Too many tile table references!");
+		}
+		if (!pcx_set_tile(expr_lablptr, value))
+			return (0);
+	}
+
+	/* ok */
+	return (1);
+}
+
+
+/* ----
+ * pcx_parse_args()
+ * ----
+ * parse arguments of pcx pseudo directive
+ */
+
+int
+pcx_parse_args(int i, int nb, int *a, int *b, int *c, int *d, int size)
+{
+	int x, y, w, h;
+
+	x = 0;
+	y = 0;
+
+	/* get coordinates */
+	if (nb == 0) {			/* no arg */
+		w = (pcx_w / size);
+		h = (pcx_h / size);
+	}
+	else if (nb == 2) {		/* 2 args */
+		w = pcx_arg[i];
+		h = pcx_arg[i + 1];
+	}
+	else {					/* 4 args */
+		x = pcx_arg[i];
+		y = pcx_arg[i + 1];
+		w = pcx_arg[i + 2];
+		h = pcx_arg[i + 3];
+	}
+
+	/* if w is zero, then calculate from image width */
+	if ((w == 0) && (x < pcx_w))
+		w = (pcx_w - x) / size;
+
+	/* if h is zero, then calculate from image height */
+	if ((h == 0) && (y < pcx_h))
+		h = (pcx_h - y) / size;
+
+	/* check */
+	if (((x + w * size) > pcx_w) || ((y + h * size) > pcx_h)) {
+		error("Coordinates out of range!");
+		return (0);
+	}
+
+	/* write back the value */
+	*a = x;
+	*b = y;
+	*c = w;
+	*d = h;
+
+	/* ok */
+	return (1);
+}
+
+
+/* ----
+ * pcx_load()
+ * ----
+ * load a PCX file and unpack it
+ */
+
+int
+pcx_load(char *name)
+{
+	FILE *f;
+	size_t l;
+
+	/* check if the file is the same as the previously loaded one;
+	 * if this is the case do not reload it
+	 */
+	if ((name[0] != '\0') && (strcasecmp(pcx_name, name) == 0))
+		return (1);
+
+	/* do we want to load a png file instead of a pcx file? */
+	if (((l = strlen(name)) > 4) && (strcasecmp(".png", (name + l - 4)) == 0))
+		return (png_load(name));
+
+	/* do we want to load a bmp file instead of a pcx file? */
+	if (((l = strlen(name)) > 4) && (strcasecmp(".bmp", (name + l - 4)) == 0))
+		return (bmp_load(name));
+
+	/* no it's a new file - ok let's prepare loading */
+	if (pcx_buf)
+		free(pcx_buf);
+	pcx_buf = NULL;
+	pcx_name[0] = '\0';
+
+	/* open the file */
+	if ((f = open_file(name, "rb")) == NULL) {
+		error("Can not open file!");
+		return (0);
+	}
+
+	/* get the picture size */
+	fread(&pcx, 128, 1, f);
+	pcx_w = (GET_SHORT(pcx.xmax) - GET_SHORT(pcx.xmin) + 1);
+	pcx_h = (GET_SHORT(pcx.ymax) - GET_SHORT(pcx.ymin) + 1);
+
+	/* adjust picture width */
+	if (pcx_w & 0x01)
+		pcx_w++;
+
+	/* check size range */
+	if ((pcx_w > 16384) || (pcx_h > 4096)) {
+		error("Picture size too big, max. 16384x4096!");
+		return (0);
+	}
+	if ((pcx_w < 16) || (pcx_h < 16)) {
+		error("Picture size too small, min. 16x16!");
+		return (0);
+	}
+
+	/* malloc a buffer */
+	pcx_buf = malloc((size_t) pcx_w * pcx_h);
+	if (pcx_buf == NULL) {
+		error("Can not load file, not enough memory!");
+		return (0);
+	}
+
+	/* decode the picture */
+	if ((pcx.bpp == 8) && (pcx.np == 1))
+		decode_256(f, pcx_w, pcx_h);
+	else if ((pcx.bpp == 1) && (pcx.np <= 4))
+		decode_16(f, pcx_w, pcx_h);
+	else {
+		error("Unsupported or invalid PCX format!");
+		return (0);
+	}
+
+	fclose(f);
+	strcpy(pcx_name, name);
+	return (1);
+}
+
+
+/* ----
+ * decode_256()
+ * ----
+ * decode a 256 colors PCX file
+ */
+
+void
+decode_256(FILE *f, int w, int h)
+{
+	unsigned int i, c, x, y;
+	unsigned char *ptr;
+
+	ptr = pcx_buf;
+	x = 0;
+	y = 0;
+
+	/* decode */
+	switch (pcx.encoding) {
+	case 0:
+		/* raw */
+		fread(pcx_buf, w, h, f);
+		c = fgetc(f);
+		return;
+
+	case 1:
+		/* simple run-length encoding */
+		do {
+			c = fgetc(f);
+			if (c == EOF)
+				break;
+			if ((c & 0xC0) != 0xC0)
+				i = 1;
+			else {
+				i = (c & 0x3F);
+				c = fgetc(f);
+			}
+			do {
+				x++;
+				*ptr++ = c;
+				if (x == w) {
+					x = 0;
+					y++;
+				}
+			} while (--i);
+		} while (y < h);
+		break;
+
+	default:
+		error("Unsupported PCX encoding scheme!");
+		return;
+	}
+
+	/* get the palette */
+	if (c != EOF)
+		c = fgetc(f);
+	while ((c != 12) && (c != EOF))
+		c = fgetc(f);
+	if (c == 12)
+		fread(pcx_pal, 768, 1, f);
+
+	/* number of colors */
+	pcx_nb_colors = 256;
+}
+
+
+/* ----
+ * decode_16()
+ * ----
+ * decode a 16 (or less) colors PCX file
+ */
+
+void
+decode_16(FILE *f, int w, int h)
+{
+	int i, j, k, n;
+	int x, y, p;
+	unsigned int c, pix;
+	unsigned char *ptr;
+
+	ptr = pcx_buf;
+	x = 0;
+	y = 0;
+	p = 0;
+
+	/* decode */
+	switch (pcx.encoding) {
+	case 0:
+		/* raw */
+		error("Unsupported PCX encoding scheme!");
+		break;
+
+	case 1:
+		/* simple run-length encoding */
+		do {
+			/* get a char */
+			c = fgetc(f);
+			if (c == EOF)
+				break;
+
+			/* check if it's a repeat command */
+			if ((c & 0xC0) != 0xC0)
+				i = 1;
+			else {
+				i = (c & 0x3F);
+				c = fgetc(f);
+			}
+
+			/* unpack */
+			do {
+				pcx_plane[x >> 3][p] = c;
+				x += 8;
+
+				/* end of line */
+				if (x >= w) {
+					x = 0;
+					p++;
+
+					/* plane to chunky conversion */
+					if (p == pcx.np) {
+						p = 0;
+						n = (w + 7) >> 3;
+						y++;
+
+						/* loop */
+						for (j = 0; j < n; j++) {
+							for (k = 7; k >= 0; k--) {
+								/* get pixel index */
+								pix = 0;
+
+								switch (pcx.np) {
+								case 4:
+									pix |= ((pcx_plane[j][3] >> k) & 0x01) << 3;
+								case 3:
+									pix |= ((pcx_plane[j][2] >> k) & 0x01) << 2;
+								case 2:
+									pix |= ((pcx_plane[j][1] >> k) & 0x01) << 1;
+								case 1:
+									pix |= ((pcx_plane[j][0] >> k) & 0x01);
+									break;
+								}
+
+								/* store pixel */
+								if (x < w)
+									*ptr++ = pix;
+
+								x++;
+							}
+						}
+						x = 0;
+					}
+				}
+			} while (--i);
+		} while (y < h);
+		break;
+
+	default:
+		error("Unsupported PCX encoding scheme!");
+		return;
+	}
+
+	/* get the palette */
+	memset(pcx_pal, 0, 768);
+	memcpy(pcx_pal, pcx.colormap, (1 << pcx.np) * 3);
+
+	/* number of colors */
+	pcx_nb_colors = 16;
+}
+
+#include <stdint.h>
+#pragma pack(1)
+typedef struct
+{
+	uint16_t magic;
+	uint32_t fileSize;
+	uint32_t reserved0;
+	uint32_t bitmapDataOffset;
+	uint32_t bitmapHeaderSize;
+	uint32_t width;
+	uint32_t height;
+	uint16_t planes;
+	uint16_t bitsPerPixel;
+	uint32_t compression;
+	uint32_t bitmapDataSize;
+	uint32_t hRes;
+	uint32_t vRes;
+	uint32_t colors;
+	uint32_t importantColors;
+} BMPHeader_t;
+
+int
+bmp_load(char *name)
+{
+	BMPHeader_t header;
+	int i;
+	FILE *      pFile      = NULL;
+	/* no it's a new file - ok let's prepare loading */
+	if (pcx_buf)
+		free(pcx_buf);
+	pcx_buf = NULL;
+	pcx_name[0] = '\0';
+
+	/* open the file */
+	if ((pFile = open_file(name, "rb")) == NULL) {
+		error("Can not open file!");
+		goto errorCleanup;
+	}
+
+	fread(&header,1,sizeof(BMPHeader_t),pFile);
+
+	/* adjust picture size to 8-pixel character boundaries */
+	pcx_w = (header.width + 7) & ~7;
+	pcx_h = (header.height + 7) & ~7;
+
+	/* check size range */
+	if ((pcx_w > 16384) || (pcx_h > 4096)) {
+		error("Picture size too big, max. 16384x4096!");
+		goto errorCleanup;
+	}
+	if ((pcx_w < 16) || (pcx_h < 16)) {
+		error("Picture size too small, min. 16x16!");
+		goto errorCleanup;
+	}
+
+	/* malloc a buffer */
+	pcx_buf = malloc((size_t) pcx_w * pcx_h);
+	if (pcx_buf == NULL) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
+	}
+	for (i=0;i<header.colors;i++)
+	{
+		fread(&pcx_pal[i][2],1,1,pFile);
+		fread(&pcx_pal[i][1],1,1,pFile);
+		fread(&pcx_pal[i][0],1,1,pFile);
+		fseek(pFile,1,SEEK_CUR);
+	}
+	for (i = header.colors; i < 256; i += 1) {
+		pcx_pal[i][0] = 0;
+		pcx_pal[i][1] = 0;
+		pcx_pal[i][2] = 0;
+	}
+	pcx_nb_colors = 256;
+
+	if (header.bitsPerPixel==4)
+	{
+		for (uint32_t y=0;y<pcx_h;y++)
+		{
+			for (uint32_t x=0;x<pcx_w;x+=2)
+			{
+				uint8_t byte;
+				fread(&byte,1,1,pFile);
+				pcx_buf[x+(((header.height-1-y))*header.width)]=byte>>4;
+				pcx_buf[1+x+(((header.height-1-y))*header.width)]=byte&0xf;
+			}
+		}
+	}
+	else 
+	{
+//					uint8_t *src = &buffer[bmp_header->bitmapDataOffset];
+		fseek(pFile,header.bitmapDataOffset,SEEK_SET);
+		for (uint32_t y=0;y<pcx_h;y++)
+		{
+
+			for (uint32_t x=0;x<pcx_w;x++)
+			{
+				uint8_t byte;
+				fread(&byte,1,1,pFile);
+				pcx_buf[x+(((header.height-1-y))*header.width)]=byte;
+			}
+		}
+	}
+
+/*
+	aImageRows = (png_byte **) malloc(uHeight * sizeof(png_byte *));
+	if (aImageRows == NULL) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
+	}
+	for (i = 0; i < uHeight; i++)
+		aImageRows[i] = (png_byte *) (pcx_buf + pcx_w * i);
+	png_read_image(pPngStruct, aImageRows);
+	png_read_end(pPngStruct, NULL);
+	png_destroy_read_struct(&pPngStruct, &pPngInfo, NULL);
+	free(aImageRows);
+*/
+	fclose(pFile);
+	strcpy(pcx_name, name);
+	return (1);
+
+	/* error handlers (reached via the dreaded goto) */
+	errorCleanup:
+	if (pFile)
+		fclose(pFile);
+
 	return (0);
 }
 
 
 /* ----
- * do_vram()
+ * png_load()
  * ----
- * .vram pseudo
+ * load a PNG file and unpack it
  */
 
-void
-pce_vram(int *ip)
+#include "png.h"
+
+int
+png_load(char *name)
 {
-	/* define label */
-	labldef(0, 0, LOCATION);
+	FILE *      pFile      = NULL;
+	png_structp pPngStruct = NULL;
+	png_infop   pPngInfo   = NULL;
+	png_byte ** aImageRows = NULL;
+	int         iPngRGB    = 0;
+	png_color * pPngRGB    = NULL;
+	png_uint_32 uWidth;
+	png_uint_32 uHeight;
+	int         iBitDepth;
+	int         iColorType;
+	unsigned    i;
 
-	/* check if there's a label */
-	if (lastlabl == NULL) {
-		error("No label!");
-		return;
+	#if 0
+	/* check if the file is the same as the previously loaded one;
+	 * if this is the case do not reload it
+	 */
+	if ((name[0] != '\0') && (strcasecmp(pcx_name, name) == 0))
+		return (1);
+	#endif
+
+	/* no it's a new file - ok let's prepare loading */
+	if (pcx_buf)
+		free(pcx_buf);
+	pcx_buf = NULL;
+	pcx_name[0] = '\0';
+
+	/* open the file */
+	if ((pFile = open_file(name, "rb")) == NULL) {
+		error("Can not open file!");
+		goto errorCleanup;
 	}
 
-	/* get the VRAM address */
-	if (!evaluate(ip, ';', 0))
-		return;
-	if (value >= 0x7F00) {
-		error("Incorrect VRAM address!");
-		return;
+	/* initialize libpng for reading the file */
+	pPngStruct = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if (!pPngStruct) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
 	}
-	lastlabl->vram = value;
 
-	/* output line */
-	if (pass == LAST_PASS) {
-		loadlc(value, 1);
-		println();
+	pPngInfo = png_create_info_struct(pPngStruct);
+	if (!pPngInfo) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
 	}
+
+	if (setjmp(png_jmpbuf(pPngStruct))) {
+		error("Unsupported or invalid PNG file!");
+		goto errorCleanup;
+	}
+
+	png_init_io(pPngStruct, pFile);
+	png_read_info(pPngStruct, pPngInfo);
+
+	/* get the picture info */
+	png_get_IHDR(pPngStruct, pPngInfo, &uWidth, &uHeight, &iBitDepth, &iColorType, NULL, NULL, NULL);
+
+	if (iColorType != PNG_COLOR_TYPE_PALETTE) {
+		error("Unsupported or invalid PNG picture format!");
+		goto errorCleanup;
+	}
+
+	if (iBitDepth < 8)
+		png_set_packing(pPngStruct);
+
+	png_read_update_info(pPngStruct, pPngInfo);
+
+	/* adjust picture size to 8-pixel character boundaries */
+	pcx_w = (uWidth + 7) & ~7;
+	pcx_h = (uHeight + 7) & ~7;
+
+	/* check size range */
+	if ((pcx_w > 16384) || (pcx_h > 4096)) {
+		error("Picture size too big, max. 16384x4096!");
+		goto errorCleanup;
+	}
+	if ((pcx_w < 16) || (pcx_h < 16)) {
+		error("Picture size too small, min. 16x16!");
+		goto errorCleanup;
+	}
+
+	/* malloc a buffer */
+	pcx_buf = malloc((size_t) pcx_w * pcx_h);
+	if (pcx_buf == NULL) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
+	}
+
+	/* get the palette */
+	if (png_get_valid(pPngStruct, pPngInfo, PNG_INFO_PLTE)) {
+		png_get_PLTE(pPngStruct, pPngInfo, &pPngRGB, &iPngRGB);
+
+		for (i = 0; i < (unsigned) iPngRGB; i += 1) {
+			pcx_pal[i][0] = pPngRGB[i].red;
+			pcx_pal[i][1] = pPngRGB[i].green;
+			pcx_pal[i][2] = pPngRGB[i].blue;
+		}
+
+		for (i = iPngRGB; i < 256; i += 1) {
+			pcx_pal[i][0] = 0;
+			pcx_pal[i][1] = 0;
+			pcx_pal[i][2] = 0;
+		}
+
+		pcx_nb_colors = (iBitDepth <= 4) ? 16 : 256;
+	}
+
+	/* create a list of each row's starting point in memory */
+	aImageRows = (png_byte **) malloc(uHeight * sizeof(png_byte *));
+	if (aImageRows == NULL) {
+		error("Can not load file, not enough memory!");
+		goto errorCleanup;
+	}
+
+	for (i = 0; i < uHeight; i++)
+		aImageRows[i] = (png_byte *) (pcx_buf + pcx_w * i);
+
+	/* decode the picture */
+	png_read_image(pPngStruct, aImageRows);
+	png_read_end(pPngStruct, NULL);
+	png_destroy_read_struct(&pPngStruct, &pPngInfo, NULL);
+
+	free(aImageRows);
+
+	fclose(pFile);
+	strcpy(pcx_name, name);
+	return (1);
+
+	/* error handlers (reached via the dreaded goto) */
+	errorCleanup:
+
+	if (pPngInfo)
+		png_destroy_read_struct(&pPngStruct, &pPngInfo, NULL);
+	else if (pPngStruct)
+		png_destroy_read_struct(&pPngStruct, NULL, NULL);
+
+	if (aImageRows)
+		free(aImageRows);
+
+	if (pFile)
+		fclose(pFile);
+
+	return (0);
 }
-
-
-/* ----
- * do_pal()
- * ----
- * .pal pseudo
- */
-
-void
-pce_pal(int *ip)
-{
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* check if there's a label */
-	if (lastlabl == NULL) {
-		error("No label!");
-		return;
-	}
-
-	/* get the palette index */
-	if (!evaluate(ip, ';', 0))
-		return;
-	if (value > 15) {
-		error("Incorrect palette index!");
-		return;
-	}
-	lastlabl->pal = value;
-
-	/* output line */
-	if (pass == LAST_PASS) {
-		loadlc(value, 1);
-		println();
-	}
-}
-
-
-/* ----
- * do_defchr()
- * ----
- * .defchr pseudo
- */
-
-void
-pce_defchr(int *ip)
-{
-	unsigned int data[8];
-	int i;
-
-	/* output infos */
-	data_loccnt = loccnt;
-	data_size = 4;
-	data_level = 3;
-
-	/* check if there's a label */
-	if (lablptr) {
-		/* define label */
-		labldef(0, 0, LOCATION);
-
-		/* get the VRAM address */
-		if (!evaluate(ip, ',', 0))
-			return;
-		if (value >= 0x7F00) {
-			error("Incorrect VRAM address!");
-			return;
-		}
-		lablptr->vram = value;
-
-		/* get the default palette */
-		if (!evaluate(ip, ',', 0))
-			return;
-		if (value > 0x0F) {
-			error("Incorrect palette index!");
-			return;
-		}
-		lablptr->pal = value;
-	}
-
-	/* get tile data */
-	for (i = 0; i < 8; i++) {
-		/* get value */
-		if (!evaluate(ip, (i < 7) ? ',' : ';', 0))
-			return;
-
-		/* store value */
-		data[i] = value;
-	}
-
-	/* encode tile */
-	pce_pack_8x8_tile(buffer, data, 0, PACKED_TILE);
-
-	/* store tile */
-	putbuffer(buffer, 32);
-
-	/* output line */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_defpal()
- * ----
- * .defpal pseudo
- */
-
-void
-pce_defpal(int *ip)
-{
-	unsigned int color;
-	unsigned int r, g, b;
-	char c;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output infos */
-	data_loccnt = loccnt;
-	data_size = 2;
-	data_level = 3;
-
-	/* get data */
-	for (;;) {
-		/* get color */
-		if (!evaluate(ip, 0, 0))
-			return;
-
-		/* store data on last pass */
-		if (pass == LAST_PASS) {
-			/* convert color */
-			r = (value >> 8) & 0x7;
-			g = (value >> 4) & 0x7;
-			b = (value) & 0x7;
-			color = (g << 6) + (r << 3) + (b);
-
-			/* store color */
-			putword(loccnt, color);
-		}
-
-		/* update location counter */
-		loccnt += 2;
-
-		/* check if there's another color */
-		c = prlnbuf[(*ip)++];
-
-		if (c != ',')
-			break;
-	}
-
-	/* output line */
-	if (pass == LAST_PASS)
-		println();
-
-	/* check errors */
-	if (c != ';' && c != '\0')
-		error("Syntax error!");
-}
-
-
-/* ----
- * do_defspr()
- * ----
- * .defspr pseudo
- */
-
-void
-pce_defspr(int *ip)
-{
-	unsigned int data[32];
-	int i;
-
-	/* output infos */
-	data_loccnt = loccnt;
-	data_size = 4;
-	data_level = 3;
-
-	/* check if there's a label */
-	if (lablptr) {
-		/* define label */
-		labldef(0, 0, LOCATION);
-
-		/* get the VRAM address */
-		if (!evaluate(ip, ',', 0))
-			return;
-		if (value >= 0x7F00) {
-			error("Incorrect VRAM address!");
-			return;
-		}
-		lablptr->vram = value;
-
-		/* get the default palette */
-		if (!evaluate(ip, ',', 0))
-			return;
-		if (value > 0x0F) {
-			error("Incorrect palette index!");
-			return;
-		}
-		lablptr->pal = value;
-	}
-
-	/* get sprite data */
-	for (i = 0; i < 32; i++) {
-		/* get value */
-		if (!evaluate(ip, (i < 31) ? ',' : ';', 0))
-			return;
-
-		/* store value */
-		data[i] = value;
-	}
-
-	/* encode sprite */
-	pce_pack_16x16_sprite(buffer, data, 0, PACKED_TILE);
-
-	/* store sprite */
-	putbuffer(buffer, 128);
-
-	/* output line */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incbat()
- * ----
- * build a BAT
- */
-
-void
-pce_incbat(int *ip)
-{
-	unsigned char *ptr, ref;
-	int i, j, k, l, x, y, w, h;
-	unsigned int base, index, flag;
-	unsigned int temp;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(1, pcx_nb_args - 1, &x, &y, &w, &h, 8))
-		return;
-
-	/* build the BAT */
-	if (pass == LAST_PASS) {
-		index = 0;
-		flag = 0;
-		base = (pcx_arg[0] >> 4);
-
-		for (i = 0; i < h; i++) {
-			for (j = 0; j < w; j++) {
-				ptr = pcx_buf + (x + (j * 8)) + ((y + (i * 8)) * pcx_w);
-				ref = ptr[0] & 0xF0;
-
-				/* check colors */
-				for (k = 0; k < 8; k++) {
-					for (l = 0; l < 8; l++) {
-						if ((ptr[l] & 0xF0) != ref)
-							flag = 1;
-					}
-					ptr += pcx_w;
-				}
-				temp = (base & 0xFFF) | ((ref & 0xF0) << 8);
-				buffer[2 * index] = temp & 0xff;
-				buffer[2 * index + 1] = temp >> 8;
-
-				index++;
-				base++;
-			}
-		}
-
-		/* errors */
-		if (flag)
-			error("Invalid color index found!");
-	}
-
-	/* store data */
-	putbuffer(buffer, 2 * w * h);
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incpal()
- * ----
- * extract the palette of a PCX file
- */
-
-void
-pce_incpal(int *ip)
-{
-	unsigned int temp;
-	int i, start, nb;
-	int r, g, b;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-
-	start = 0;
-	nb = pcx_nb_colors;
-
-	if (pcx_nb_args) {
-		start = pcx_arg[0] << 4;
-
-		if (pcx_nb_args == 1)
-			nb = 16;
-		else {
-			nb = pcx_arg[1] << 4;
-		}
-	}
-
-	/* check args */
-	if (((start + nb) > 256) || (nb == 0)) {
-		error("Palette index out of range!");
-		return;
-	}
-
-	/* make data */
-	if (pass == LAST_PASS) {
-		for (i = 0; i < nb; i++) {
-			r = pcx_pal[start + i][0];
-			g = pcx_pal[start + i][1];
-			b = pcx_pal[start + i][2];
-			temp = ((r & 0xE0) >> 2) | ((g & 0xE0) << 1) | ((b & 0xE0) >> 5);
-			buffer[2 * i] = temp & 0xff;
-			buffer[2 * i + 1] = temp >> 8;
-		}
-	}
-
-	/* store data */
-	putbuffer(buffer, nb << 1);
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incspr()
- * ----
- * PCX to sprites
- */
-
-void
-pce_incspr(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int sx, sy;
-	int nb_sprite = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args, &x, &y, &w, &h, 16))
-		return;
-
-	/* pack sprites */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* sprite coordinates */
-			sx = x + (j << 4);
-			sy = y + (i << 4);
-
-			/* encode sprite */
-			pcx_pack_16x16_sprite(buffer + 128 * (nb_sprite % 256), sx, sy);
-			nb_sprite++;
-
-			/* max 256 sprites */
-			if (nb_sprite >= 257) {
-				error("Too many sprites in image! The maximum is 256.");
-				return;
-			}
-		}
-	}
-
-	/* store a maximum of 256 sprites (32KB) */
-	if (nb_sprite > 256) nb_sprite = 256;
-	if (nb_sprite)
-		putbuffer(buffer, 128 * nb_sprite);
-
-	/* size */
-	if (lablptr) {
-		lablptr->data_type = P_INCSPR;
-		lablptr->data_size = 128 * nb_sprite;
-	}
-	else {
-		if (lastlabl) {
-			if (lastlabl->data_type == P_INCSPR)
-				lastlabl->data_size += 128 * nb_sprite;
-		}
-	}
-
-	/* attach the number of loaded sprites to the label */
-	if (lastlabl) {
-		if (nb_sprite) {
-			lastlabl->nb = nb_sprite;
-			if (pass == LAST_PASS)
-				lastlabl->size = 128;
-		}
-	}
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_inctile()
- * ----
- * PCX to 16x16 tiles (max 256 tiles per inctile, wraps around if 257)
- */
-
-void
-pce_inctile(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int tx, ty;
-	int nb_tile = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args, &x, &y, &w, &h, 16))
-		return;
-
-	/* pack tiles */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* tile coordinates */
-			tx = x + (j << 4);
-			ty = y + (i << 4);
-
-			/* encode tile */
-			pcx_pack_16x16_tile(buffer + 128 * (nb_tile % 256), tx, ty);
-			nb_tile++;
-
-			/* max 256 tiles, with number 257 wrapping around to */
-			/* tile 0 to deal with art programs (like ProMotion) */
-			/* that always store a blank tile 0. */
-			if (nb_tile == 257) {
-				warning("Using the graphics from tile 256 as tile 0.");
-			} else
-			if (nb_tile >= 258) {
-				error("Too many tiles in image! The maximum is 256.");
-				return;
-			}
-		}
-	}
-
-	/* store a maximum of 256 tiles (32KB) */
-	if (nb_tile > 256) nb_tile = 256;
-	if (nb_tile)
-		putbuffer(buffer, 128 * nb_tile);
-
-	/* size */
-	if (lablptr) {
-		lablptr->data_type = P_INCTILE;
-		lablptr->data_size = 128 * nb_tile;
-	}
-	else {
-		if (lastlabl) {
-			if (lastlabl->data_type == P_INCTILE)
-				lastlabl->data_size += 128 * nb_tile;
-		}
-	}
-
-	/* attach the number of loaded tiles to the label */
-	if (lastlabl) {
-		if (nb_tile) {
-			lastlabl->nb = nb_tile;
-			if (pass == LAST_PASS)
-				lastlabl->size = 128;
-		}
-	}
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incchrpal()
- * ----
- * PCX to palette array for 8x8 tiles
- */
-
-void
-pce_incchrpal(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int tx, ty;
-	int nb_chr = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args, &x, &y, &w, &h, 16))
-		return;
-
-	/* scan tiles */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* tile coordinates */
-			tx = x + (j << 3);
-			ty = y + (i << 3);
-
-			/* get chr palette */
-			buffer[0] = pce_scan_8x8_tile(tx, ty) << 4;
-
-			/* store palette number */
-			putbuffer(buffer, 1);
-			nb_chr++;
-		}
-	}
-
-	/* size */
-	if (lablptr) {
-		lablptr->data_type = P_INCCHRPAL;
-		lablptr->data_size = nb_chr;
-	}
-	else {
-		if (lastlabl) {
-			if (lastlabl->data_type == P_INCCHRPAL)
-				lastlabl->data_size += nb_chr;
-		}
-	}
-
-	/* attach the number of tile palette bytes to the label */
-	if (lastlabl) {
-		if (nb_chr) {
-			lastlabl->nb = nb_chr;
-			if (pass == LAST_PASS)
-				lastlabl->size = 1;
-		}
-	}
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incsprpal()
- * ----
- * PCX to palette array for 16x16 sprites
- */
-
-void
-pce_incsprpal(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int tx, ty;
-	int nb_sprite = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args, &x, &y, &w, &h, 16))
-		return;
-
-	/* scan sprites */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* sprite coordinates */
-			tx = x + (j << 4);
-			ty = y + (i << 4);
-
-			/* get sprite palette */
-			buffer[0] = pce_scan_16x16_tile(tx, ty);
-
-			/* store palette number */
-			putbuffer(buffer, 1);
-			nb_sprite++;
-		}
-	}
-
-	/* size */
-	if (lablptr) {
-		lablptr->data_type = P_INCSPRPAL;
-		lablptr->data_size = nb_sprite;
-	}
-	else {
-		if (lastlabl) {
-			if (lastlabl->data_type == P_INCSPRPAL)
-				lastlabl->data_size += nb_sprite;
-		}
-	}
-
-	/* attach the number of sprite palette bytes to the label */
-	if (lastlabl) {
-		if (nb_sprite) {
-			lastlabl->nb = nb_sprite;
-			if (pass == LAST_PASS)
-				lastlabl->size = 1;
-		}
-	}
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_inctilepal()
- * ----
- * PCX to palette array for 16x16 tiles
- */
-
-void
-pce_inctilepal(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int tx, ty;
-	int nb_tile = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args, &x, &y, &w, &h, 16))
-		return;
-
-	/* scan tiles */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* tile coordinates */
-			tx = x + (j << 4);
-			ty = y + (i << 4);
-
-			/* get tile palette */
-			buffer[(nb_tile % 256)] = pce_scan_16x16_tile(tx, ty) << 4;
-			nb_tile++;
-
-			/* max 256 tiles, with number 257 wrapping around to */
-			/* tile 0 to deal with art programs (like ProMotion) */
-			/* that always store a blank tile 0. */
-			if (nb_tile == 257) {
-				warning("Using the palette from tile 256 for tile 0.");
-			} else
-			if (nb_tile >= 258) {
-				error("Too many tiles in image! The maximum is 256.");
-				return;
-			}
-		}
-	}
-
-	/* store a maximum of 256 tile palettes */
-	if (nb_tile > 256) nb_tile = 256;
-	if (nb_tile)
-		putbuffer(buffer, nb_tile);
-
-	/* size */
-	if (lablptr) {
-		lablptr->data_type = P_INCTILEPAL;
-		lablptr->data_size = nb_tile;
-	}
-	else {
-		if (lastlabl) {
-			if (lastlabl->data_type == P_INCTILEPAL)
-				lastlabl->data_size += nb_tile;
-		}
-	}
-
-	/* attach the number of tile palette bytes to the label */
-	if (lastlabl) {
-		if (nb_tile) {
-			lastlabl->nb = nb_tile;
-			if (pass == LAST_PASS)
-				lastlabl->size = 1;
-		}
-	}
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_incmap()
- * ----
- * .incmap pseudo - convert a tiled PCX into a map
- */
-
-void
-pce_incmap(int *ip)
-{
-	unsigned int i, j;
-	int x, y, w, h;
-	unsigned int tx, ty;
-	int tile;
-	int err = 0;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* get args */
-	if (!pcx_get_args(ip))
-		return;
-	if (!pcx_parse_args(0, pcx_nb_args - 1, &x, &y, &w, &h, 16))
-		return;
-
-	/* pack map */
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			/* tile coordinates */
-			tx = x + (j << 4);
-			ty = y + (i << 4);
-
-			/* get tile */
-			pcx_pack_16x16_tile(buffer, tx, ty);
-
-			/* search tile */
-			tile = pcx_search_tile(buffer, 128);
-
-			if (tile == -1) {
-				/* didn't find the tile */
-				tile = 0;
-				err++;
-			}
-
-			/* store tile index */
-			if (pass == LAST_PASS)
-				putbyte(loccnt, tile & 0xFF);
-
-			/* update location counter */
-			loccnt++;
-		}
-	}
-
-	/* error */
-	if (err)
-		error("One or more tiles didn't match!");
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
-
-/* ----
- * do_mml()
- * ----
- * .mml pseudo - music/sound macro language
- */
-
-void
-pce_mml(int *ip)
-{
-	int offset, bufsize, size;
-	char mml[128];
-	char c;
-
-	/* define label */
-	labldef(0, 0, LOCATION);
-
-	/* output */
-	if (pass == LAST_PASS)
-		loadlc(loccnt, 0);
-
-	/* start */
-	bufsize = 8192;
-	offset = mml_start(buffer);
-	bufsize -= offset;
-
-	/* extract and parse mml string(s) */
-	for (;;) {
-		/* get string */
-		if (!getstring(ip, mml, 127))
-			return;
-
-		/* parse string */
-		size = mml_parse(buffer + offset, bufsize, mml);
-
-		if (size == -1)
-			return;
-
-		/* adjust buffer size */
-		offset += size;
-		bufsize -= size;
-
-		/* next string */
-		c = prlnbuf[(*ip)++];
-
-		if ((c != ',') && (c != ';') && (c != '\0')) {
-			error("Syntax error!");
-			return;
-		}
-		if (c != ',')
-			break;
-
-		/* skip spaces */
-		while (isspace(prlnbuf[*ip]))
-			(*ip)++;
-
-		/* continuation char */
-		if (prlnbuf[*ip] == '\\') {
-			(*ip)++;
-
-			/* skip spaces */
-			while (isspace(prlnbuf[*ip]))
-				(*ip)++;
-
-			/* check */
-			if (prlnbuf[*ip] == ';' || prlnbuf[*ip] == '\0') {
-				/* output line */
-				if (pass == LAST_PASS) {
-					println();
-					clearln();
-				}
-
-				/* read a new line */
-				if (readline() == -1)
-					return;
-
-				/* rewind line pointer and continue */
-				*ip = preproc_sfield;
-			}
-			else {
-				error("Syntax error!");
-				return;
-			}
-		}
-	}
-
-	/* stop */
-	offset += mml_stop(buffer + offset);
-
-	/* store data */
-	putbuffer(buffer, offset);
-
-	/* output */
-	if (pass == LAST_PASS)
-		println();
-}
-
