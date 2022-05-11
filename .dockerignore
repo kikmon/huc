@@ -1,0 +1,3 @@
+# ignore .git and .cache folders
+# .git # needed because makefile ar looking for it
+.github
