@@ -10,10 +10,10 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build_matrix:
+  build_linux:
     strategy:
       matrix:
-        os: [ubuntu-18.04, ubuntu-20.04, macos-11, macos-12]
+        os: [ubuntu-18.04, ubuntu-20.04]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out code from the repository
@@ -21,6 +21,28 @@ jobs:
       - name: Build
         run: |
           make
+          echo Build Complete
+      - name: Archive toolchain
+        uses: actions/upload-artifact@v3
+        with:
+          name: toolchain
+          path: |
+            bin
+            include
+
+  build_mac:
+    strategy:
+      matrix:
+        os: [macos-11, macos-12]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out code from the repository
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          # brew install coreutils #need than ?
+          brew install make # need gnumake
+          gmake
           echo Build Complete
       - name: Archive toolchain
         uses: actions/upload-artifact@v3
