@@ -30,7 +30,7 @@ jobs:
           echo Build Complete
       - name: Build
         run: |
-          ${{ makecommand }}
+          make
           echo Build Complete
       - name: Archive toolchain
         uses: actions/upload-artifact@v3
