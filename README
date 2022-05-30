@@ -106,7 +106,7 @@ C. How to build
   - install msys2
   - Install dependencies: pacman -S binutils make mingw-w64-x86_64-gcc git --noconfirm
   - In a MINGW64 shell, run make at the root (using the commandline, it looks like msys2_shell.cmd -mingw64 -no-start -defterm -c "make")
-...
+....
 - Mac:
   - use brew to install make
   - build using calling gmake at the root
