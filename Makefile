@@ -27,7 +27,7 @@ test:
 
 check:
 	@echo ''
-ifneq ($(OS),Windows_NT)
+ifeq ($(OS),Windows_NT)
 	dos2unix examples/huc/checksum.txt
 endif
 	md5sum -c examples/huc/checksum.txt
