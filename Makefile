@@ -27,7 +27,7 @@ test:
 
 check:
 	@echo ''
-	dos2unix examples/huc/checksum.txt
+	#dos2unix examples/huc/checksum.txt
 	md5sum -c examples/huc/checksum.txt
 
 DATE = $(shell date +%F)
