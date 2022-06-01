@@ -49,7 +49,7 @@ jobs:
             examples/**/*.iso
             examples/**/*.pce
             examples/**/*.sgx
-            tgemu/tgemu*
+            tgemu/tgemu
 
   test:
     strategy:
