@@ -165,5 +165,4 @@ jobs:
             files: |
               *.zip
         attempt_limit: 3
-        attempt_delay:3000
-       
+        attempt_delay: 3000
