@@ -164,5 +164,5 @@ jobs:
             rm: true # do not keep old latest artifacts
             files: |
               *.zip
-        attempt_limit: 3
-        attempt_delay: 3000
+          attempt_limit: 3
+          attempt_delay: 3000
