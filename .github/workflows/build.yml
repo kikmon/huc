@@ -157,7 +157,7 @@ jobs:
       - name: publish package
         uses: Wandalen/wretry.action@v1.0.25
         with:
-          action: pyTooling/Actions/releaser@r0
+          action: pyTooling/Actions@r0
           with: |
             token: ${{ secrets.GITHUB_TOKEN }}
             tag: ${{ github.ref_name }}
