@@ -155,9 +155,9 @@ jobs:
         # https://github.com/pyTooling/Actions/tree/main/releaser
         # need to use composite on windows, since docker isn't available
       - name: publish package
-        uses: Wandalen/wretry.action@v1.0.25
+        uses: Wandalen/wretry.action@v1.0.27
         with:
-          action: pyTooling/Actions@r0
+          action: pyTooling/Actions/releaser@r0
           with: |
             token: ${{ secrets.GITHUB_TOKEN }}
             tag: ${{ github.ref_name }}
